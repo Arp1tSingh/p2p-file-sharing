@@ -52,6 +52,53 @@ def b64d(s: str) -> bytes:
     return base64.b64decode(s.encode())
 
 
+# ---------- magnet links ----------
+# Web form (phone-friendly, opens the test UI):  {tracker_url}/?m={info_hash}
+# Text form (CLI paste):  magnet:?xt=urn:p2p:{info_hash}&tr={tracker_url}&dn={name}
+
+def build_magnet(info_hash: str, tracker_url: str, name: str = "") -> str:
+    q = f"xt=urn:p2p:{info_hash}&tr={tracker_url}"
+    if name:
+        q += "&dn=" + urllib.parse.quote(name)
+    return "magnet:?" + q
+
+
+def web_link(tracker_url: str, info_hash: str) -> str:
+    return f"{tracker_url.rstrip('/')}/?m={info_hash}"
+
+
+def parse_magnet(s: str) -> dict:
+    s = s.strip().strip("\"'")
+    if s.startswith("magnet:?"):
+        q = urllib.parse.parse_qs(s[len("magnet:?"):])
+        xt = (q.get("xt") or [""])[0]
+        if not xt.startswith("urn:p2p:"):
+            raise ValueError("bad magnet: missing xt=urn:p2p:<info_hash>")
+        return {"info_hash": xt[len("urn:p2p:"):],
+                "tracker_url": (q.get("tr") or [""])[0],
+                "name": (q.get("dn") or [""])[0]}
+    if "/?m=" in s or s.startswith("?m="):
+        u = urllib.parse.urlparse(s if "://" in s else "http://x/" + s.lstrip("/"))
+        ih = (urllib.parse.parse_qs(u.query).get("m") or [""])[0]
+        base = "" if s.startswith("?m=") else f"{u.scheme}://{u.netloc}"
+        if not ih:
+            raise ValueError("bad link: missing ?m=<info_hash>")
+        return {"info_hash": ih, "tracker_url": base, "name": ""}
+    raise ValueError("not a magnet or share link")
+
+
+def publish_meta(base: str, meta: dict, timeout: int = 30) -> dict:
+    return http_post_json(f"{base.rstrip('/')}/publish", {
+        "name": meta["name"], "size": meta["size"],
+        "piece_length": meta["piece_length"], "pieces": meta["pieces"],
+        "info_hash": meta["info_hash"]}, timeout=timeout)
+
+
+def fetch_meta(base: str, info_hash: str, timeout: int = 30) -> dict:
+    return http_get_json(f"{base.rstrip('/')}/meta", {"info_hash": info_hash},
+                         timeout=timeout)
+
+
 def http_post_json(url: str, payload: dict, timeout: int = 30) -> dict:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data,

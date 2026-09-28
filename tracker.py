@@ -6,12 +6,15 @@ Endpoints:
   GET  /health
   POST /announce  {info_hash, peer_id, mode, direct_ip, direct_port, event}
   GET  /peers?info_hash=
+  POST /publish   {name, size, piece_length, pieces[], info_hash}  (magnet store)
+  GET  /meta?info_hash=   (fetch metainfo for a magnet link)
   POST /relay/request {info_hash, from_peer_id, to_peer_id, piece_index}
   GET  /relay/inbox?peer_id=&timeout=   (long-poll, seeder side)
   POST /relay/send    {request_id, to_peer_id, piece_index, data_b64}
   GET  /relay/fetch?peer_id=&request_id=&timeout=  (long-poll, leecher side)
 """
 import argparse
+import hashlib
 import json
 import os
 import threading
@@ -24,11 +27,14 @@ ANNOUNCE_INTERVAL = 30
 PEER_TTL = 3 * ANNOUNCE_INTERVAL
 RELAY_TTL = 60
 RELAY_MAX_BYTES = 512 * 1024 * 1024
+META_TTL = 24 * 3600
+META_MAX_PIECES = 2000
 
 lock = threading.Lock()
 peers: dict[str, dict[str, dict]] = {}          # info_hash -> peer_id -> record
 inboxes: dict[str, list[dict]] = {}             # seeder peer_id -> pending requests
 payloads: dict[str, dict] = {}                  # request_id -> {to_peer_id, piece_index, data_b64, ts, size}
+metas: dict[str, dict] = {}                     # info_hash -> {metainfo..., ts}
 relay_bytes = 0
 
 
@@ -50,6 +56,28 @@ def prune():
             if t - payloads[rid]["ts"] > RELAY_TTL:
                 relay_bytes -= payloads[rid]["size"]
                 del payloads[rid]
+        for ih in list(metas):
+            if t - metas[ih]["ts"] > META_TTL:
+                del metas[ih]
+
+
+def valid_meta(body: dict) -> str | None:
+    """Return error string, or None if the published metainfo is acceptable."""
+    try:
+        pieces = body["pieces"]
+        if not isinstance(pieces, list) or not pieces or len(pieces) > META_MAX_PIECES:
+            return f"pieces must be 1..{META_MAX_PIECES} hashes"
+        if any(not isinstance(h, str) or len(h) != 40 for h in pieces):
+            return "each piece must be a 40-char sha1 hex"
+        if not isinstance(body.get("size"), int) or body["size"] < 0:
+            return "bad size"
+        if not isinstance(body.get("piece_length"), int) or not 1024 <= body["piece_length"] <= 8 * 1024 * 1024:
+            return "bad piece_length"
+        if hashlib.sha1("".join(pieces).encode()).hexdigest() != body.get("info_hash"):
+            return "info_hash does not match piece hashes"
+    except (KeyError, TypeError, AttributeError):
+        return "missing/invalid fields"
+    return None
 
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -120,6 +148,14 @@ class Handler(BaseHTTPRequestHandler):
                           "direct_ip": r.get("direct_ip"), "direct_port": r.get("direct_port")}
                          for pid, r in peers.get(ih, {}).items()]
             return self._send(200, {"peers": plist, "interval": ANNOUNCE_INTERVAL})
+        if u.path == "/meta":
+            ih = q.get("info_hash", [""])[0]
+            with lock:
+                m = metas.get(ih)
+                meta = {k: v for k, v in m.items() if k != "ts"} if m else None
+            if not meta:
+                return self._send(404, {"error": "unknown torrent — ask the sharer to re-share (links expire after 24h)"})
+            return self._send(200, meta)
         if u.path == "/relay/inbox":
             pid = q.get("peer_id", [""])[0]
             timeout = min(float(q.get("timeout", ["25"])[0]), 30)
@@ -181,6 +217,17 @@ class Handler(BaseHTTPRequestHandler):
                          for k, v in peers[ih].items() if k != pid]
             return self._send(200, {"peers": plist, "interval": ANNOUNCE_INTERVAL,
                                     "relay": True})
+        if u.path == "/publish":
+            body = self._read_json()
+            err = valid_meta(body)
+            if err:
+                return self._send(400, {"error": err})
+            with lock:
+                metas[body["info_hash"]] = {
+                    "name": body.get("name", ""), "size": body["size"],
+                    "piece_length": body["piece_length"], "pieces": body["pieces"],
+                    "info_hash": body["info_hash"], "ts": now()}
+            return self._send(200, {"ok": True})
         if u.path == "/relay/request":
             body = self._read_json()
             rid = uuid.uuid4().hex[:16]

@@ -1,0 +1,23 @@
+name: keepalive
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping tracker health
+        env:
+          P2P_URL: ${{ secrets.P2P_URL }}
+        run: |
+          URL="${P2P_URL:-https://p2p-file-sharing-pjgm.onrender.com}"
+          # cold starts can take ~60s on free tier; retry patiently
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS -m 90 "$URL/health"; then echo; echo "alive"; exit 0; fi
+            echo "attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          echo "tracker still down after retries" >&2
+          exit 1

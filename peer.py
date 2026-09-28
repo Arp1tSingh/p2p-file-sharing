@@ -14,7 +14,9 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import b64d, b64e, http_get_json, http_post_json, load_torrent
+from common import (b64d, b64e, build_magnet, fetch_meta, http_get_json,
+                    http_post_json, load_torrent, parse_magnet, publish_meta,
+                    web_link)
 
 STOP = threading.Event()
 
@@ -135,6 +137,12 @@ def read_piece(path, idx, piece_length):
 
 def seed_loop(base, meta, file_path, peer_id, mode, direct_ip, direct_port):
     info_hash = meta["info_hash"]
+    try:
+        publish_meta(base, meta)
+        print(f"[seed] link: {web_link(base, info_hash)}", flush=True)
+        print(f"[seed] magnet: {build_magnet(info_hash, base, meta['name'])}", flush=True)
+    except Exception as e:
+        print(f"[seed] meta publish failed (magnet links won't work): {e}", flush=True)
     announce(base, info_hash, peer_id, mode, "started", direct_ip, direct_port)
     threading.Thread(target=heartbeat,
                      args=(base, info_hash, peer_id, mode, direct_ip, direct_port),
@@ -208,9 +216,33 @@ def cmd_seed(args):
         announce(base, meta["info_hash"], peer_id, args.mode, "stopped")
 
 
-def cmd_download(args):
+def resolve_download_source(args):
+    """Return (meta, base). Accepts .torrent.json path, magnet:, or ?m= link."""
+    if args.magnet:
+        parsed = parse_magnet(args.magnet)
+        base = (args.tracker or parsed["tracker_url"] or "").rstrip("/")
+        if not base:
+            sys.exit("ERROR: magnet has no tracker; pass --tracker <url>")
+        meta = fetch_meta(base, parsed["info_hash"])
+        meta["tracker_url"] = base
+        return meta, base
+    if args.torrent and (args.torrent.startswith("magnet:?") or "/?m=" in args.torrent
+                         or args.torrent.startswith("?m=")):
+        parsed = parse_magnet(args.torrent)
+        base = (args.tracker or parsed["tracker_url"]).rstrip("/")
+        if not base:
+            sys.exit("ERROR: link has no tracker host; pass --tracker <url>")
+        meta = fetch_meta(base, parsed["info_hash"])
+        meta["tracker_url"] = base
+        return meta, base
+    if not args.torrent:
+        sys.exit("ERROR: give a .torrent.json path or --magnet \"magnet:?xt=...\"")
     meta = load_torrent(args.torrent)
-    base = (args.tracker or meta["tracker_url"]).rstrip("/")
+    return meta, (args.tracker or meta["tracker_url"]).rstrip("/")
+
+
+def cmd_download(args):
+    meta, base = resolve_download_source(args)
     info_hash = meta["info_hash"]
     my_id = uuid.uuid4().hex[:12]
     n = len(meta["pieces"])
@@ -314,8 +346,10 @@ def main():
     s.add_argument("--direct-ip", default=None,
                    help="advertised direct IP (default: auto-detect)")
 
-    d = sub.add_parser("download", help="Download via torrent file")
-    d.add_argument("torrent")
+    d = sub.add_parser("download", help="Download via torrent file, magnet, or share link")
+    d.add_argument("torrent", nargs="?", default=None,
+                   help=".torrent.json path, magnet:?..., or https://.../?m=<info_hash>")
+    d.add_argument("--magnet", default=None, help="magnet link (alternative to positional)")
     d.add_argument("--out", required=True)
     d.add_argument("--tracker", default=None)
     d.add_argument("--mode", choices=["auto", "relay", "direct"], default="relay")
