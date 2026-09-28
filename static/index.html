@@ -39,6 +39,8 @@ textarea{font-family:ui-monospace,monospace;font-size:12px}
 details{margin-top:12px}summary{color:var(--mut);font-size:13px;cursor:pointer}
 #log{background:#070b12;border:1px solid var(--line);border-radius:12px;padding:10px;height:170px;overflow:auto;font:12px/1.6 ui-monospace,monospace;white-space:pre-wrap}
 a.dl{color:var(--ok);font-weight:700}
+a.savebtn{display:inline-block;margin-top:10px;padding:13px 22px;background:var(--ok);color:#06121f;font-weight:700;font-size:15px;border-radius:11px;text-decoration:none;min-height:48px}
+#dl-preview{margin-top:10px}#dl-preview video,#dl-preview img{max-width:100%;border-radius:10px;border:1px solid var(--line)}
 #toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9;width:min(92vw,480px)}
 .toast{background:#1a2334;border:1px solid var(--line);border-radius:10px;padding:11px 14px;font-size:14px}
 .toast.bad{border-color:var(--bad)}
@@ -65,6 +67,7 @@ a.dl{color:var(--ok);font-weight:700}
 <div class="stat" id="dl-stat">idle</div>
 <div class="heat" id="dl-heat"></div>
 <div class="stat" id="dl-save"></div>
+<div id="dl-preview"></div>
 <div class="row">
 <div><button class="btn ok" id="dl-go" disabled>Download</button></div>
 <div><button class="btn ghost" id="dl-stop" disabled>Stop</button></div>
@@ -156,7 +159,7 @@ $("dl-go").onclick=async()=>{
  try{
   if(!dlMeta&&$("dl-json").value.trim()){try{dlMeta=JSON.parse($("dl-json").value);showFile(dlMeta);}catch{toast("paste a link above, or valid torrent JSON",1);return;}}
   if(!dlMeta){toast("paste a share link first",1);return;}
-  const meta=dlMeta,myId=pid(),n=meta.pieces.length;dlStop=false;$("dl-stop").disabled=false;$("dl-save").innerHTML="";$("dl-go").disabled=true;
+  const meta=dlMeta,myId=pid(),n=meta.pieces.length;dlStop=false;$("dl-stop").disabled=false;$("dl-save").innerHTML="";$("dl-preview").innerHTML="";$("dl-go").disabled=true;
   log("dl:",meta.name,meta.info_hash,n+" pieces");
   const t0=performance.now();let seeders=[];
   for(let i=0;i<15&&!dlStop;i++){const r=await post("/announce",{info_hash:meta.info_hash,peer_id:myId,mode:"relay",event:"started"});seeders=(r.peers||[]).map(p=>p.peer_id);if(seeders.length)break;$("dl-stat").textContent="waiting for sharer… ("+(i+1)+") — keep this tab open";await new Promise(r=>setTimeout(r,4000));}
@@ -186,9 +189,16 @@ $("dl-go").onclick=async()=>{
   const total=new Uint8Array(meta.size);let off=0;
   for(let i=0;i<n;i++){const u=new Uint8Array(out[i]);total.set(u.subarray(0,Math.min(u.length,meta.size-off)),off);off+=u.length;}
   const blob=new Blob([total],{type:"application/octet-stream"}),url=URL.createObjectURL(blob);
-  const a=document.createElement("a");a.href=url;a.download=meta.name;a.className="dl";a.textContent="save "+meta.name;
-  $("dl-save").innerHTML="done ("+fmtB(meta.size)+", "+((performance.now()-t0)/1000).toFixed(1)+"s, verified) — ";$("dl-save").append(a);
-  log("dl: done, verified "+n+" pieces");
+  const a=document.createElement("a");a.href=url;a.download=meta.name;a.className="savebtn";a.textContent="⬇ save "+meta.name+" to this device";
+  $("dl-save").innerHTML="done ("+fmtB(meta.size)+", "+((performance.now()-t0)/1000).toFixed(1)+"s, verified) — tap the button to move it into Downloads:";
+  $("dl-save").append(document.createElement("br"),a);
+  const ext=(meta.name.split(".").pop()||"").toLowerCase();
+  if(["mp4","webm","mov","m4v"].includes(ext))$("dl-preview").innerHTML='<video controls playsinline src="'+url+'" style="width:100%"></video>';
+  else if(["jpg","jpeg","png","gif","webp"].includes(ext))$("dl-preview").innerHTML='<img src="'+url+'">';
+  else $("dl-preview").innerHTML="";
+  log("dl: done, verified "+n+" pieces — tap Save to store the file");
+  toast("download complete — tap Save to store it");
+  try{a.click();}catch(e){}
   post("/announce",{info_hash:meta.info_hash,peer_id:myId,mode:"relay",event:"completed"});
   if($("dl-seed").checked)seedBlob(meta,total);
  }catch(e){toast(String(e.message||e),1);log("dl: ERROR",e.message||e);$("dl-stop").disabled=true;$("dl-go").disabled=false;}
