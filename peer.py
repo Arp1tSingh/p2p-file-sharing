@@ -355,7 +355,7 @@ def main():
     d.add_argument("--mode", choices=["auto", "relay", "direct"], default="relay")
     d.add_argument("--direct-port", type=int, default=6882)
     d.add_argument("--direct-ip", default=None)
-    d.add_argument("--workers", type=int, default=4)
+    d.add_argument("--workers", type=int, default=6)
     d.add_argument("--no-seed-after", action="store_true",
                    help="exit after download instead of seeding")
     a = p.parse_args()

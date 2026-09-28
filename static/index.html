@@ -86,7 +86,7 @@ a.savebtn{display:inline-block;margin-top:10px;padding:13px 22px;background:var(
 <div class="hint">Pick a file → Share → send the link. One tap, no terminal.</div>
 <div class="drop" id="seed-drop">Tap to pick a file, or drop it here<input id="seed-file" type="file" hidden></div>
 <div class="stat" id="seed-picked">no file picked</div>
-<div class="row"><div><label class="lbl">Piece size</label><select id="seed-pl"><option value="65536">64 KB</option><option value="131072" selected>128 KB</option></select></div></div>
+<div class="row"><div><label class="lbl">Piece size</label><select id="seed-pl"><option value="65536">64 KB</option><option value="131072" selected>128 KB</option><option value="262144">256 KB (faster, big files)</option><option value="524288">512 KB (fastest, big files)</option></select></div></div>
 <button class="btn" id="seed-go">Share this file</button>
 <div id="seed-linkbox" style="display:none">
 <label class="lbl">Send this link (works for 24h while you stay online)</label>
@@ -180,8 +180,8 @@ $("dl-go").onclick=async()=>{
    }
    throw new Error("piece "+idx+" failed — sharer offline?");
   };
-  const W=4;let cur=0,failed=null;
-  const worker=async()=>{while(cur<n&&!dlStop&&!failed){const i=cur++;try{out[i]=await one(i);done++;heatSet($("dl-heat"),i,"ok");const el=(performance.now()-t0)/1000;const got=out.filter(Boolean).reduce((s,b)=>s+b.byteLength,0);const rate=got/Math.max(el,.01);$("dl-bar").style.width=(100*done/n)+"%";$("dl-stat").textContent=done+"/"+n+" ("+Math.round(100*done/n)+"%) @ "+fmtB(rate)+"/s • ETA "+fmtETA(meta.size-got,rate);}catch(e){failed=e;return;}}};
+  const W=6;let cur=0,failed=null,tFirst=0;
+  const worker=async()=>{while(cur<n&&!dlStop&&!failed){const i=cur++;try{out[i]=await one(i);done++;if(!tFirst)tFirst=performance.now();heatSet($("dl-heat"),i,"ok");const el=(performance.now()-(done>2?tFirst:t0))/1000;const got=out.filter(Boolean).reduce((s,b)=>s+b.byteLength,0);const rate=got/Math.max(el,.01);$("dl-bar").style.width=(100*done/n)+"%";$("dl-stat").textContent=done+"/"+n+" ("+Math.round(100*done/n)+"%) @ "+fmtB(rate)+"/s"+(done>2?" • ETA "+fmtETA(meta.size-got,rate):"");}catch(e){failed=e;return;}}};
   await Promise.all(Array.from({length:Math.min(W,n)},worker));
   $("dl-stop").disabled=true;$("dl-go").disabled=false;
   if(dlStop){$("dl-stat").textContent="stopped";return;}
