@@ -49,7 +49,7 @@ a.dl{color:var(--ok);font-weight:700}
 </head>
 <body>
 <div class="wrap">
-<header><span id="hdot" class="dot"></span><h1>p2p share</h1><small id="hurl"></small></header>
+<header><span id="hdot" class="dot" title="tap to retry"></span><h1>p2p share</h1><small id="hurl"></small> <small id="herr" style="color:var(--bad)"></small></header>
 <p class="hint">Share files between devices on different networks. No account, no port forwarding. Keep this tab in the foreground during a transfer.</p>
 
 <div class="cols">
@@ -124,8 +124,16 @@ const fmtETA=(left,rate)=>!rate?"…":rate>0?Math.round(left/rate)+"s":"…";
 function b64enc(buf){const u=new Uint8Array(buf);let s="";for(let i=0;i<u.length;i+=8192)s+=String.fromCharCode(...u.subarray(i,i+8192));return btoa(s);}
 function b64dec(s){const b=atob(s);const u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u.buffer;}
 async function post(p,o){const r=await fetch(base+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)});if(!r.ok){let m=r.status;try{m=(await r.json()).error||m;}catch{}throw new Error(p+" → "+m);}return r.json();}
-async function get(p){const r=await fetch(base+p);if(r.status===408){const e=new Error("timeout");e.t408=true;throw e;}if(!r.ok){let m=r.status;try{m=(await r.json()).error||m;}catch{}const e=new Error(p.split("?")[0]+" → "+m);if(r.status===404)e.e404=true;throw e;}return r.json();}
-async function health(){try{await get("/health");$("hdot").className="dot ok";$("hurl").textContent=location.host+" • relay up";}catch{$("hdot").className="dot bad";$("hurl").textContent="tracker unreachable — check connection";}}
+async function get(p,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||30000);try{const r=await fetch(base+p,{signal:c.signal});if(r.status===408){const e=new Error("timeout");e.t408=true;throw e;}if(!r.ok){let m=r.status;try{m=(await r.json()).error||m;}catch{}const e=new Error(p.split("?")[0]+" → HTTP "+m);if(r.status===404)e.e404=true;throw e;}return r.json();}catch(e){if(e.name==="AbortError")throw new Error(p.split("?")[0]+" → no response in 15s (network/timeout)");throw e;}finally{clearTimeout(t);}}
+let lastHealthOk=null;
+async function health(manual){let ok=false,err="";try{await get("/health",15000);ok=true;}catch(e){err=e.message||e;}
+ if(ok!==lastHealthOk||manual){log("health: "+(ok?"relay up":"UNREACHABLE ("+err+")"));}
+ lastHealthOk=ok;
+ $("hdot").className="dot "+(ok?"ok":"bad");
+ $("hurl").textContent=location.host+" • "+(ok?"relay up":"trying "+location.host+"/health…");
+ $("herr").textContent=ok?"":"last error: "+err;
+ if(manual)toast(ok?"tracker reachable":"tracker unreachable: "+err,!ok);}
+$("hdot").style.cursor="pointer";$("hdot").onclick=()=>health(true);
 $("hurl").textContent=location.host;health();setInterval(health,30000);
 function heat(el,n){el.innerHTML="";for(let i=0;i<n;i++)el.append(document.createElement("i"));}
 function heatSet(el,i,cls){const c=el.children[i];if(c)c.className=cls;}
