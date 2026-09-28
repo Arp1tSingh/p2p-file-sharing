@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>p2p test ui</title>
+<style>
+:root{--bg:#0b0f17;--card:#131a26;--line:#223047;--txt:#e8eef7;--mut:#93a1b8;--acc:#5b9dff;--ok:#3ddc84;--bad:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:20px 14px 60px}
+header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.dot{width:10px;height:10px;border-radius:50%;background:#555}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+h1{font-size:19px;margin:0}small{color:var(--mut)}
+.tabs{display:flex;gap:8px;margin:14px 0}
+.tabs button{flex:1;padding:11px;border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:10px;font-size:15px}
+.tabs button.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+label{display:block;color:var(--mut);font-size:13px;margin:10px 0 4px}
+input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0e1420;color:var(--txt);font-size:14px}
+textarea{font-family:ui-monospace,monospace;font-size:12px;min-height:110px}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1;min-width:140px}
+.btn{display:inline-block;width:100%;margin-top:12px;padding:13px;border:0;border-radius:11px;background:var(--acc);color:#06121f;font-weight:700;font-size:15px}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+.btn.danger{background:transparent;border:1px solid var(--bad);color:var(--bad)}
+.bar{height:10px;background:#0e1420;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+.stat{color:var(--mut);font-size:13px;margin-top:6px;word-break:break-all}
+#log{background:#070b12;border:1px solid var(--line);border-radius:12px;padding:10px;height:190px;overflow:auto;font:12px/1.6 ui-monospace,monospace;white-space:pre-wrap}
+a.dl{color:var(--ok);font-weight:700}
+.hint{color:var(--mut);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><span id="hdot" class="dot"></span><h1>p2p test ui</h1><small id="hurl"></small></header>
+<div class="hint">Phone or laptop browser = a peer. Relay runs on this same host, so no port forwarding. Keep this tab in the foreground during transfer.</div>
+<div class="tabs"><button id="t-dl" class="on">Download</button><button id="t-seed">Share</button></div>
+
+<div id="p-dl" class="card">
+<label>Torrent JSON (paste, or load .torrent.json file)</label>
+<textarea id="dl-json" placeholder='{"name":...,"info_hash":...}'></textarea>
+<div class="row"><div><label>torrent file</label><input id="dl-file" type="file" accept=".json,application/json"></div>
+<div><label>save as</label><input id="dl-name" placeholder="output filename"></div></div>
+<label><input id="dl-seed" type="checkbox" checked style="width:auto"> keep seeding after download (so a 2nd device can fetch from this one)</label>
+<button class="btn" id="dl-go">Download via relay</button>
+<button class="btn ghost" id="dl-stop" disabled>Stop</button>
+<div class="bar"><i id="dl-bar"></i></div><div class="stat" id="dl-stat">idle</div>
+<div class="stat" id="dl-link"></div>
+</div>
+
+<div id="p-seed" class="card" style="display:none">
+<label>File to share</label><input id="seed-file" type="file">
+<div class="row"><div><label>piece size</label><select id="seed-pl"><option value="65536">64 KB</option><option value="131072" selected>128 KB</option></select></div>
+<div><label>tracker</label><input id="seed-trk" readonly></div></div>
+<button class="btn ghost" id="seed-make">1) Make torrent JSON</button>
+<label>Share this JSON with the other device (copy / download)</label>
+<textarea id="seed-json" readonly></textarea>
+<div class="row"><button class="btn ghost" id="seed-copy">Copy</button><button class="btn ghost" id="seed-dl">Download .torrent.json</button></div>
+<button class="btn" id="seed-go">2) Start seeding</button>
+<button class="btn danger" id="seed-stop" disabled>Stop seeding</button>
+<div class="stat" id="seed-stat">idle</div>
+</div>
+
+<div class="card"><label>log</label><div id="log"></div></div>
+</div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const base=""; // same origin
+const log=(...a)=>{const e=$("log");e.textContent+=a.join(" ")+"\n";e.scrollTop=e.scrollHeight;};
+const pid=()=>[...crypto.getRandomValues(new Uint8Array(6))].map(b=>b.toString(16).padStart(2,"0")).join("");
+const hex=buf=>[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+const sha1hex=async data=>hex(await crypto.subtle.digest("SHA-1",data));
+const utf8=s=>new TextEncoder().encode(s);
+function b64enc(buf){const u=new Uint8Array(buf);let s="";for(let i=0;i<u.length;i+=8192)s+=String.fromCharCode(...u.subarray(i,i+8192));return btoa(s);}
+function b64dec(s){const b=atob(s);const u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u.buffer;}
+async function post(p,o){const r=await fetch(base+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)});if(!r.ok)throw new Error(p+" "+r.status);return r.json();}
+async function get(p){const r=await fetch(base+p);if(r.status===408){const e=new Error("timeout");e.t408=true;throw e;}if(!r.ok)throw new Error(p+" "+r.status);return r.json();}
+async function health(){try{const r=await get("/health");$("hdot").className="dot ok";$("hurl").textContent=location.host+" • relay up";}catch{ $("hdot").className="dot bad";$("hurl").textContent="tracker unreachable";}}
+$("hurl").textContent=location.host;$("seed-trk").value=location.origin;health();setInterval(health,15000);
+$("t-dl").onclick=()=>{$("t-dl").classList.add("on");$("t-seed").classList.remove("on");$("p-dl").style.display="";$("p-seed").style.display="none";};
+$("t-seed").onclick=()=>{$("t-seed").classList.add("on");$("t-dl").classList.remove("on");$("p-seed").style.display="";$("p-dl").style.display="none";};
+$("dl-file").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{$("dl-json").value=r.result;if(!$("dl-name").value){try{$("dl-name").value=JSON.parse(r.result).name||"";}catch{}}};r.readAsText(f);};
+
+// ---------- download ----------
+let dlStop=false;
+$("dl-stop").onclick=()=>{dlStop=true;};
+$("dl-go").onclick=async()=>{
+ if(!crypto.subtle){alert("WebCrypto unavailable — use https or localhost");return;}
+ let meta;try{meta=JSON.parse($("dl-json").value);}catch{alert("paste valid torrent JSON first");return;}
+ const myId=pid(),n=meta.pieces.length;dlStop=false;$("dl-stop").disabled=false;$("dl-link").innerHTML="";
+ log("dl: info_hash",meta.info_hash,"pieces",n);
+ const t0=performance.now();let seeders=[];
+ for(let i=0;i<12&&!dlStop;i++){const r=await post("/announce",{info_hash:meta.info_hash,peer_id:myId,mode:"relay",event:"started"});seeders=(r.peers||[]).map(p=>p.peer_id);if(seeders.length)break;log("dl: waiting for seeder... ("+(i+1)+")");await new Promise(r=>setTimeout(r,4000));}
+ if(!seeders.length){log("dl: ERROR no seeder online");$("dl-stop").disabled=true;return;}
+ log("dl: seeders:",seeders.length);
+ const out=new Array(n);let done=0;
+ const one=async idx=>{
+  const exp=meta.pieces[idx];
+  for(let a=0;a<8&&!dlStop;a++){
+   const to=seeders[(idx+a)%seeders.length];
+   try{
+    const {request_id}=await post("/relay/request",{info_hash:meta.info_hash,from_peer_id:myId,to_peer_id:to,piece_index:idx});
+    const g=await get("/relay/fetch?peer_id="+myId+"&request_id="+request_id+"&timeout=25");
+    const buf=b64dec(g.data_b64);
+    if(await sha1hex(buf)!==exp){log("dl: piece",idx,"hash mismatch, retry");continue;}
+    return buf;
+   }catch(e){if(!e.t408)await new Promise(r=>setTimeout(r,800));}
+  }
+  throw new Error("piece "+idx+" failed — seeder offline?");
+ };
+ const W=4;let cur=0;const errs=[];
+ const worker=async()=>{while(cur<n&&!dlStop){const i=cur++;try{out[i]=await one(i);done++;const el=(performance.now()-t0)/1000;const got=out.filter(Boolean).reduce((s,b)=>s+b.byteLength,0);$("dl-bar").style.width=(100*done/n)+"%";$("dl-stat").textContent=done+"/"+n+" "+Math.round(100*done/n)+"% @ "+Math.round(got/Math.max(el,.01)/1024)+" KB/s";}catch(e){errs.push(e.message);return;}}};
+ await Promise.all(Array.from({length:Math.min(W,n)},worker));
+ $("dl-stop").disabled=true;
+ if(errs.length){log("dl: ERROR "+errs[0]);return;}
+ let total=new Uint8Array(meta.size),off=0;
+ for(let i=0;i<n;i++){const u=new Uint8Array(out[i]);total.set(u.subarray(0,Math.min(u.length,meta.size-off)),off);off+=u.length;}
+ const blob=new Blob([total],{type:"application/octet-stream"});
+ const url=URL.createObjectURL(blob);
+ const nm=$("dl-name").value||meta.name||"download.bin";
+ $("dl-link").innerHTML='done ('+meta.size+' B, '+((performance.now()-t0)/1000).toFixed(1)+'s, verified) — <a class="dl" href="'+url+'" download="'+nm+'">save '+nm+'</a>';
+ log("dl: done, verified "+n+" pieces");
+ post("/announce",{info_hash:meta.info_hash,peer_id:myId,mode:"relay",event:"completed"});
+ if($("dl-seed").checked){startSeedBlob(meta,total);}
+};
+async function startSeedBlob(meta,bytes){
+ const myId=pid();
+ await post("/announce",{info_hash:meta.info_hash,peer_id:myId,mode:"relay",event:"started"});
+ setInterval(()=>post("/announce",{info_hash:meta.info_hash,peer_id:myId,mode:"relay",event:"started"}),25000);
+ log("seed-after-dl: serving as "+myId+" (keep tab open)");
+ (async()=>{while(true){try{const items=await get("/relay/inbox?peer_id="+myId+"&timeout=25");for(const q of items){const s=q.piece_index*meta.piece_length;const sl=bytes.slice(s,s+meta.piece_length);await post("/relay/send",{request_id:q.request_id,to_peer_id:q.from_peer_id,piece_index:q.piece_index,data_b64:b64enc(sl)});}}catch(e){await new Promise(r=>setTimeout(r,1000));}}})();
+}
+
+// ---------- seed ----------
+let seedMeta=null,seedBuf=null,seedOn=false,seedId=null;
+$("seed-file").onchange=async e=>{seedBuf=await e.target.files[0].arrayBuffer();log("seed: loaded",seedBuf.byteLength,"B");};
+$("seed-make").onclick=async()=>{
+ if(!seedBuf){alert("pick a file first");return;}
+ const f=$("seed-file").files[0],pl=+$("seed-pl").value,ph=[];
+ for(let o=0;o<seedBuf.byteLength;o+=pl)ph.push(await sha1hex(seedBuf.slice(o,o+pl)));
+ if(!ph.length)ph.push(await sha1hex(new ArrayBuffer(0)));
+ const ih=await sha1hex(utf8(ph.join("")));
+ seedMeta={name:f.name,size:seedBuf.byteLength,piece_length:pl,pieces:ph,info_hash:ih,tracker_url:location.origin};
+ $("seed-json").value=JSON.stringify(seedMeta,null,1);$("seed-stat").textContent=ph.length+" pieces, info_hash="+ih;log("seed: torrent ready, "+ph.length+" pieces");
+};
+$("seed-copy").onclick=()=>{navigator.clipboard.writeText($("seed-json").value);log("seed: json copied");};
+$("seed-dl").onclick=()=>{const b=new Blob([$("seed-json").value],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(seedMeta?seedMeta.name+".torrent.json":"torrent.json");a.click();};
+$("seed-go").onclick=async()=>{
+ if(!seedMeta){alert("press 'Make torrent JSON' first");return;}
+ seedOn=true;seedId=pid();$("seed-stop").disabled=false;
+ await post("/announce",{info_hash:seedMeta.info_hash,peer_id:seedId,mode:"relay",event:"started"});
+ setInterval(()=>seedOn&&post("/announce",{info_hash:seedMeta.info_hash,peer_id:seedId,mode:"relay",event:"started"}),25000);
+ $("seed-stat").textContent="seeding as "+seedId+" — keep tab open";log("seed: live as "+seedId);
+ while(seedOn){try{const items=await get("/relay/inbox?peer_id="+seedId+"&timeout=25");for(const q of items){const s=q.piece_index*seedMeta.piece_length;const sl=seedBuf.slice(s,s+seedMeta.piece_length);await post("/relay/send",{request_id:q.request_id,to_peer_id:q.from_peer_id,piece_index:q.piece_index,data_b64:b64enc(sl)});log("seed: served piece "+q.piece_index);}}catch(e){await new Promise(r=>setTimeout(r,800));}}
+};
+$("seed-stop").onclick=async()=>{seedOn=false;$("seed-stop").disabled=true;if(seedMeta)await post("/announce",{info_hash:seedMeta.info_hash,peer_id:seedId,mode:"relay",event:"stopped"});log("seed: stopped");};
+</script>
+</body>
+</html>

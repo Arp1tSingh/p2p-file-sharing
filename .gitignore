@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.part
+*.torrent.json
+data/sample.bin
+downloads/

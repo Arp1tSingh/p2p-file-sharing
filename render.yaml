@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: p2p-tracker
+    env: python
+    plan: free
+    startCommand: python tracker.py --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
